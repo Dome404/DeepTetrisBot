@@ -11,3 +11,5 @@ This repository contains the implementation of the Tetris game in two different 
 `RobotTetris.py` is designed for running a bot to play Tetris. If you have a pretrained model, you can use it to make the bot play. If you want to train a bot from scratch, this file also provides the necessary functionality.
 
 Please note that the documentation and code organization are still a big work in progress. If you encounter any issues or have any questions, feel free to reach out. Enjoy playing Tetris!
+
+The code is compatible with Python 3.10. Make sure to install the required packages listed in the requirements.txt file before running the code.
