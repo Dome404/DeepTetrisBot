@@ -6,6 +6,21 @@ import pygame
 import numpy as np
 import queue
 from tqdm import tqdm
+from statistics import mean
+from Agent import DQNAgent
+from logs import CustomTensorBoard
+from datetime import datetime
+from pygame.locals import *
+
+import os
+#import psutil
+
+#def show_RAM_usage():
+#    py = psutil.Process(os.getpid())
+#    print('RAM usage: {} GB'.format(py.memory_info()[0]/2. ** 30))
+
+
+from keras.models import load_model
 
 
 WINDOW_WIDTH, WINDOW_HEIGHT = 500, 601
@@ -120,9 +135,6 @@ class Block(pygame.sprite.Sprite):
         """
         self.mask = pygame.mask.from_surface(self.image)
 
-    def initial_draw(self):
-        raise NotImplementedError
-
     @property
     def group(self):
         return self.groups()[0]
@@ -211,6 +223,7 @@ class IBlock(Block):
     )
     def __init__(self):
         self.color = LIGHTBLUE1
+        self.type = IBlock
         super().__init__()
 
 
@@ -223,6 +236,7 @@ class OBlock(Block):
     )
     def __init__(self):
         self.color = YELLOW1 
+        self.type = OBlock
         super().__init__()
 
 class JBlock(Block):
@@ -232,6 +246,7 @@ class JBlock(Block):
     )
     def __init__(self):
         self.color = DARKBLUE1
+        self.type = JBlock
         super().__init__()
 
 class LBlock(Block):
@@ -241,6 +256,7 @@ class LBlock(Block):
     )
     def __init__(self):
         self.color = ORANGE1
+        self.type = LBlock
         super().__init__()
 
 class SBlock(Block):
@@ -250,6 +266,7 @@ class SBlock(Block):
     )
     def __init__(self):
         self.color = GREEN1
+        self.type = SBlock
         super().__init__()
 
 class ZBlock(Block):
@@ -259,6 +276,7 @@ class ZBlock(Block):
     )
     def __init__(self):
         self.color = RED1
+        self.type = ZBlock
         super().__init__()
 
 class TBlock(Block):
@@ -268,6 +286,7 @@ class TBlock(Block):
     )
     def __init__(self):
         self.color = PINK1
+        self.type = TBlock
         super().__init__()
 
 
@@ -418,6 +437,9 @@ class TETRIS(pygame.sprite.OrderedUpdates):
             self.current_block.rotate(self)
             self.update_grid()
 
+    def get_score(self):
+        return self.score
+
     ##Functions specific for AI
 
     def play_move(self, x, rotation):
@@ -440,7 +462,10 @@ class TETRIS(pygame.sprite.OrderedUpdates):
             if any(self.grid[0]) or any(self.grid[1]):
                 game_over = True
 
-            self._pick_new_block()
+            try:
+                self._pick_new_block()
+            except TopReached:
+                game_over = True
         else:
             self.update_grid()
 
@@ -450,6 +475,118 @@ class TETRIS(pygame.sprite.OrderedUpdates):
             reward -= 2
 
         return reward, game_over
+    
+    def get_next_states(self):
+        '''Get all possible next states'''
+        states = {}
+        current_block_type = self.current_block.type
+        
+        if current_block_type == OBlock: 
+            rotations = [0]
+        elif current_block_type == IBlock:
+            rotations = [0, 1]
+        else:
+            rotations = [0, 1, 2, 3]
+        starting_x = self.current_block.x
+        starting_y = self.current_block.y
+        # For all rotations
+        for rotation in rotations:
+            self.current_block.x = starting_x
+            rotation_count = rotation
+            while(rotation_count > 0):
+                self.current_block.rotate(self)
+                rotation_count -=1
+
+            for i in range(0,6):
+                self.current_block.move_left(self)
+            min_x = self.current_block.x
+
+            for i in range(0,10):
+                self.current_block.move_right(self)
+            max_x = self.current_block.x
+            #print("max_x =", max_x)
+
+
+            # For all positions
+            for x in range(min_x, max_x+1):
+                #calculate the resulting board
+                board = self.calculate_board_if_dropped(x, starting_y)
+                #Save the "states" from the calculated board
+                states[(x, rotation)] = self.get_board_state_properties(board)
+                #return the blocks to their original positions
+                self.current_block.x = starting_x
+                self.current_block.y = starting_y
+                self.update_grid()
+            
+            #rotate the block back to starting rotation
+            if(rotation):
+                while(4 - rotation > 0):
+                    self.current_block.rotate(self)
+                    rotation +=1
+
+
+        return states
+    
+    def calculate_board_if_dropped(self, x, y):
+        self.current_block.x = x
+        self.current_block.y = y
+
+        try:
+            self.current_block.move_down_press(self)
+        except BottomReached:
+            self.stop_moving_current_block()
+            self.update_grid()
+            board = [[True if val != 0 else False for val in row] for row in self.grid]
+            #print(board)
+            return board
+        
+        return None
+
+    def get_board_state_properties(self, board):
+        '''Get properties of the board'''
+        full_lines = self.full_lines_count(board)
+        holes = self.hole_count(board)
+        bumpiness = self.bumpiness_count(board)
+        sum_height = self.sum_of_heights(board)
+        return [full_lines, holes, bumpiness, sum_height]
+    
+    def full_lines_count(self, board):
+        count = 0
+        for row in board:
+            if all(row):
+                count += 1
+        return count
+    
+    def hole_count(self, board):
+        count = 0
+        for col in range(len(board[0])):
+            for row in range(1, len(board)):
+                if not board[row][col] and board[row-1][col]:
+                    count += 1
+        return count
+    
+    def bumpiness_count(self, board):
+        heights = []
+        for col in range(len(board[0])):
+            for row in range(len(board)):
+                if board[row][col]:
+                    heights.append(len(board) - row)
+                    break
+            else:
+                heights.append(0)
+        diffs = [abs(heights[i] - heights[i+1]) for i in range(len(heights)-1)]
+        return sum(diffs)
+
+    def sum_of_heights(self, board):
+        heights = []
+        for col in range(len(board[0])):
+            for row in range(len(board)):
+                if board[row][col]:
+                    heights.append(len(board) - row)
+                    break
+            else:
+                heights.append(0)
+        return sum(heights)
 
     
 
@@ -474,11 +611,45 @@ def draw_centered_surface(screen, surface, y):
     screen.blit(surface, (400 - surface.get_width()//2, y))
 
 
+
+def display_message(screen, font, message, pos):
+    text = font.render(message, True, (255, 255, 255))
+    rect = text.get_rect(center=pos)
+    screen.blit(text, rect)
+
+def ask_training_mode(screen, font):
+    screen.fill((0, 0, 0))
+    display_message(screen, font, "Want to train, or let the bot play?", (screen.get_width() // 2, 100))
+    train_button = pygame.draw.rect(screen, (0, 255, 0), (50, 200, 150, 50))
+    play_button = pygame.draw.rect(screen, (255, 0, 0), (250, 200, 150, 50))
+    display_message(screen, font, "Train", train_button.center)
+    display_message(screen, font, "Play", play_button.center)
+    pygame.display.flip()
+    while True:
+        for event in pygame.event.get():
+            if event.type == QUIT:
+                pygame.quit()
+                quit()
+            elif event.type == MOUSEBUTTONDOWN:
+                pos = pygame.mouse.get_pos()
+                if train_button.collidepoint(pos):
+                    return True
+                elif play_button.collidepoint(pos):
+                    return False
+
 def main():
+    #ask the player if he wants to train, or let the AI play
+    pygame.init()
+    screen = pygame.display.set_mode((640, 480))
+    pygame.display.set_caption("Tetris")
+    font = pygame.font.SysFont('arial', 20)
+    Training = ask_training_mode(screen, font)
+    pygame.quit()
+
+
     pygame.init()
     pygame.display.set_caption("Tetris")
     screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-    run = True
     game_over = False
     # Create background.
     background = pygame.Surface(screen.get_size())
@@ -502,92 +673,180 @@ def main():
     #The training process and gameplay
     episodes = 2000
     max_steps = None
-    epsilon_stop_episode = 1300
-    mem_size = 3000
+    epsilon_stop_episode = 1200
+    mem_size = 20000
     discount = 0.95
-    batch_size = 512
+    batch_size = 512 #512
     epochs = 1
-    render_every = 50
+    render_every = 25
     log_every = 50
     replay_start_size = 2000
     train_every = 1
-    n_neurons = [32, 32]
+    n_neurons = [32, 32] #[32, 32] 
     render_delay = None
-    activations = ['relu', 'relu', 'linear']
+    save_model_every = 25
+    activations = ['relu', 'relu', 'linear'] #['relu', 'relu', 'linear']
+    state_size = 4
 
-    agent = DQNAgent(env.get_state_size(),
+    #here you give the path and the name to an already existing model that you created
+    model_dir = f'models/tetris-episode=1650'
+    model_path = os.path.join(model_dir, 'current_model.h5')
+    replay_path = os.path.join(model_dir, 'replay_buffer.bin')
+    agent = DQNAgent(state_size,
                      n_neurons=n_neurons, activations=activations,
                      epsilon_stop_episode=epsilon_stop_episode, mem_size=mem_size,
-                     discount=discount, replay_start_size=replay_start_size)
-
+                     discount=discount, replay_start_size=replay_start_size,
+                     pretrained_model=not Training, model_file=model_path, continueing=False, buffer_file = replay_path)
     log_dir = f'logs/tetris-nn={str(n_neurons)}-mem={mem_size}-bs={batch_size}-e={epochs}-{datetime.now().strftime("%Y%m%d-%H%M%S")}'
     log = CustomTensorBoard(log_dir=log_dir)
 
     scores = []
 
+    if Training == True:
+        for episode in tqdm(range(episodes)):
+            #print("test0")
+            #Where to save model
+            model_dir = f'models/tetris-episode={episode}'
+            current_state = (0,0,0,0)
+            tetris.reset()
+            steps = 0
+            game_over = False
 
-    for episode in tqdm(range(episodes)):
-        current_state = tetris.reset()
-        done = False
-        steps = 0
+            if render_every and episode % render_every == 0:
+                render = True
+            else:
+                render = False
+           
+            #Game
+            while not game_over:
+                # Event handling
+                for event in pygame.event.get():
+                    # User input collection
+                    if event.type == pygame.QUIT:
+                        game_over = True
+                        break
+                    
 
-        if render_every and episode % render_every == 0:
-            render = True
-        else:
-            render = False
+                    # Movement Handling
+    
+                
+                # AI move
+                next_states = tetris.get_next_states()
+                best_state = agent.best_state(next_states.values())
 
-        #Game
-        while run:
-            #Event handling
-            #--------------------------------------------------
-            for event in pygame.event.get():
-                # User input collection
-                if event.type == pygame.QUIT:
-                    run = False
-                    break
+                best_action = None #this is an array [x, rotation]
+                for action, state in next_states.items():
+                    if state == best_state:
+                        best_action = action
+                        break
+
+                reward, game_over = tetris.play_move(best_action[0], best_action[1])
+
+
+                agent.add_to_memory(current_state, next_states[best_action], reward, game_over)
+
+                #print(current_state, next_states[best_action], reward, game_over)
+                current_state = next_states[best_action]
+                steps += 1
+
+
+                #--------------------------------------------------
+                if render == True:
+                    # Draw background and grid.
+                    screen.blit(background, (0, 0))
+                    # Blocks.
+                    tetris.draw(screen)
+                    # Sidebar with misc. information.
+                    draw_centered_surface(screen, next_block_text, 50)
+                    draw_centered_surface(screen, tetris.next_block.image, 100)
+                    draw_centered_surface(screen, score_msg_text, 240)
+                    score_text = font.render(
+                        str(tetris.score), True, WHITE, bgcolor)
+                    draw_centered_surface(screen, score_text, 270)
+                    if game_over:
+                        draw_centered_surface(screen, game_over_text, 360)
+                        print("Final Score is",tetris.score)
+                    # Update.
+                    pygame.display.flip()
+
+                
+            
+            scores.append(tetris.get_score())
+            #print("test1")
+            # Train
+            if episode % train_every == 0:
+                #show_RAM_usage()
+                agent.train(batch_size=batch_size, epochs=epochs)
+
+
+            if (episode % save_model_every == 0) and (episode > 300):
+                
+                agent.save_model_to_dir(model_dir)
+                replay_path = os.path.join(model_dir, 'replay_buffer.bin')
+                agent.save_replay_buffer(replay_path)
+
+            #print("test2")
+            # Logs
+            if log_every and episode and episode % log_every == 0:
+                avg_score = mean(scores[-log_every:])
+                min_score = min(scores[-log_every:])
+                max_score = max(scores[-log_every:])
+
+                log.log(episode, avg_score=avg_score, min_score=min_score,
+                        max_score=max_score)
+            #print("test4")
+    else:
+        while(1):
+            current_state = (0,0,0,0)
+            tetris.reset()
+            game_over = False
+            render=True
+
+            
+            #Game
+            while not game_over:
+                # Event handling
+                for event in pygame.event.get():
+                    # User input collection
+                    if event.type == pygame.QUIT:
+                        game_over = True
+                        break
+                    
 
                 # Movement Handling
-                x = 6
-                rotation = 3
-                try:
-                    if event.type == EVENT_MOVE_CURRENT_BLOCK:
-                        reward, game_over = tetris.play_move(x, rotation)
-                except TopReached:
-                    game_over = True
-                if(game_over == True):
-                    run = False
+    
+                # AI move
+                next_states = tetris.get_next_states()
+                best_state = agent.best_state(next_states.values())
 
-            #--------------------------------------------------
-            if render == True:
-                # Draw background and grid.
-                screen.blit(background, (0, 0))
-                # Blocks.
-                tetris.draw(screen)
-                # Sidebar with misc. information.
-                draw_centered_surface(screen, next_block_text, 50)
-                draw_centered_surface(screen, tetris.next_block.image, 100)
-                draw_centered_surface(screen, score_msg_text, 240)
-                score_text = font.render(
-                    str(tetris.score), True, WHITE, bgcolor)
-                draw_centered_surface(screen, score_text, 270)
-                if game_over:
-                    draw_centered_surface(screen, game_over_text, 360)
-                    print("Final Score is",tetris.score)
-                # Update.
-                pygame.display.flip()
+                best_action = None #this is an array [x, rotation]
+                for action, state in next_states.items():
+                    if state == best_state:
+                        best_action = action
+                        break
 
-        # Train
-        if episode % train_every == 0:
-            agent.train(batch_size=batch_size, epochs=epochs)
+                reward, game_over = tetris.play_move(best_action[0], best_action[1])
 
-        # Logs
-        if log_every and episode and episode % log_every == 0:
-            avg_score = mean(scores[-log_every:])
-            min_score = min(scores[-log_every:])
-            max_score = max(scores[-log_every:])
+                #--------------------------------------------------
+                if render == True:
+                    # Draw background and grid.
+                    screen.blit(background, (0, 0))
+                    # Blocks.
+                    tetris.draw(screen)
+                    # Sidebar with misc. information.
+                    draw_centered_surface(screen, next_block_text, 50)
+                    draw_centered_surface(screen, tetris.next_block.image, 100)
+                    draw_centered_surface(screen, score_msg_text, 240)
+                    score_text = font.render(
+                        str(tetris.score), True, WHITE, bgcolor)
+                    draw_centered_surface(screen, score_text, 270)
+                    if game_over:
+                        draw_centered_surface(screen, game_over_text, 360)
+                        print("Final Score is",tetris.score)
+                    # Update.
+                    pygame.display.flip()
 
-            log.log(episode, avg_score=avg_score, min_score=min_score,
-                    max_score=max_score)
+
     pygame.quit()
 
 

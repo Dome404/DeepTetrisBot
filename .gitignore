@@ -1,0 +1,8 @@
+# Exclude logs directory
+/logs/
+
+# Exclude models directory
+/models/
+
+# Exclude test.py file
+test.py
