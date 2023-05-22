@@ -6,3 +6,6 @@
 
 # Exclude test.py file
 test.py
+
+# Exclude __pycache__ directory
+/__pycache__/
